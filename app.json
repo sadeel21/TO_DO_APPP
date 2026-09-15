@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "my-app",
+    "slug": "my-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/todo_app_icon.png",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/todo_app_icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#7C3AED"
+    },
+    "ios": {
+      "icon": "./assets/images/todo_app_icon.png"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#7C3AED",
+        "foregroundImage": "./assets/images/todo_app_icon.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/todo_app_icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "This app uses your photos for your profile picture.",
+          "cameraPermission": "This app uses the camera for your profile picture.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#7C3AED",
+          "image": "./assets/images/todo_app_icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
