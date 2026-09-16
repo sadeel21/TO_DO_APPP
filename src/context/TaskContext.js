@@ -1,28 +1,31 @@
 /**
  * React concept: Context + useEffect
  *
- * Tasks and lists load/save through the Express API (PostgreSQL).
- * Subtasks, notes, and completedAt stay in AsyncStorage until those tables have routes.
+ * Tasks, lists, notes, completedAt, and subtasks load/save through the API.
+ * Selected list stays in memory (not a shared DB concern).
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
 import { DEFAULT_LISTS, normalizeTask } from '@/constants/lists';
+import { useUser } from '@/context/UserContext';
 import {
+  addSubtask as apiAddSubtask,
   createList as apiCreateList,
   createTask as apiCreateTask,
   deleteList as apiDeleteList,
+  deleteSubtask as apiDeleteSubtask,
   deleteTask as apiDeleteTask,
   getLists,
   getTasks,
+  setApiUserId,
   updateList as apiUpdateList,
+  updateSubtask as apiUpdateSubtask,
   updateTask as apiUpdateTask,
 } from '@/utils/api';
 import { confirmDelete } from '@/utils/confirmDelete';
+import { pickNextPhrase } from '@/utils/motivationalPhrases';
 
-const EXTRAS_KEY = '@todo/task-extras';
-const SELECTED_KEY = '@todo/selected-list';
 const UNDO_MS = 5000;
 const DEFAULT_LIST_NAMES = DEFAULT_LISTS.map((list) => list.name);
 
@@ -30,34 +33,31 @@ function mapList(row) {
   return { id: String(row.id), name: row.name };
 }
 
-function mapTask(row, extra = {}, fallbackListId) {
+function mapSubtask(row) {
+  return {
+    id: String(row.id),
+    text: row.text,
+    completed: Boolean(row.completed),
+  };
+}
+
+function mapTask(row, fallbackListId) {
   const due = row.due_date ? String(row.due_date).slice(0, 10) : null;
+  const completedAt = row.completed_at || (row.completed ? row.created_at : null);
   return normalizeTask({
     id: String(row.id),
     text: row.text,
     completed: Boolean(row.completed),
     createdAt: row.created_at,
-    completedAt: extra.completedAt || (row.completed ? row.created_at : null),
+    completedAt,
     priority: row.priority || 'medium',
     category: row.category || 'personal',
     dueDate: due,
-    notes: extra.notes || '',
+    notes: row.notes || '',
+    imageUri: row.image_uri || '',
     listId: row.list_id != null ? String(row.list_id) : fallbackListId,
-    subtasks: Array.isArray(extra.subtasks) ? extra.subtasks : [],
+    subtasks: Array.isArray(row.subtasks) ? row.subtasks.map(mapSubtask) : [],
   });
-}
-
-function extrasFromTasks(taskList) {
-  return Object.fromEntries(
-    taskList.map((task) => [
-      String(task.id),
-      {
-        notes: task.notes || '',
-        subtasks: task.subtasks || [],
-        completedAt: task.completedAt || null,
-      },
-    ])
-  );
 }
 
 function payloadFromTask(task) {
@@ -68,6 +68,9 @@ function payloadFromTask(task) {
     priority: task.priority || 'medium',
     category: task.category || null,
     due_date: task.dueDate || null,
+    notes: task.notes || '',
+    completed_at: task.completedAt || null,
+    image_uri: task.imageUri || null,
   };
 }
 
@@ -91,12 +94,22 @@ function payloadFromPatch(patch) {
   if (patch.listId !== undefined) {
     body.list_id = patch.listId ? Number(patch.listId) : null;
   }
+  if (patch.notes !== undefined) {
+    body.notes = patch.notes;
+  }
+  if (patch.completedAt !== undefined) {
+    body.completed_at = patch.completedAt;
+  }
+  if (patch.imageUri !== undefined) {
+    body.image_uri = patch.imageUri || '';
+  }
   return body;
 }
 
 const TaskContext = createContext(null);
 
 export function TaskProvider({ children }) {
+  const { userId, hydrated: userHydrated } = useUser();
   const [tasks, setTasks] = useState([]);
   const [lists, setLists] = useState([]);
   const [selectedListId, setSelectedListId] = useState(null);
@@ -104,19 +117,21 @@ export function TaskProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [undoItem, setUndoItem] = useState(null);
+  const [motivation, setMotivation] = useState(null);
   const undoTimer = useRef(null);
-  const extrasReady = useRef(false);
+  const lastPhrase = useRef('');
 
   const loadFromApi = useCallback(async () => {
+    if (!userId) {
+      setLoading(false);
+      setHydrated(true);
+      return;
+    }
+    setApiUserId(userId);
     setLoading(true);
     setError(null);
     try {
-      const [savedSelected, extrasRaw, apiLists, apiTasks] = await Promise.all([
-        AsyncStorage.getItem(SELECTED_KEY),
-        AsyncStorage.getItem(EXTRAS_KEY),
-        getLists(),
-        getTasks(),
-      ]);
+      const [apiLists, apiTasks] = await Promise.all([getLists(), getTasks()]);
 
       let listRows = Array.isArray(apiLists) ? apiLists : [];
       if (listRows.length === 0) {
@@ -127,48 +142,35 @@ export function TaskProvider({ children }) {
       }
 
       const mappedLists = listRows.map(mapList);
-      const extras = extrasRaw ? JSON.parse(extrasRaw) : {};
       const fallbackListId = mappedLists[0]?.id;
       const mappedTasks = (Array.isArray(apiTasks) ? apiTasks : []).map((row) =>
-        mapTask(row, extras[String(row.id)] || {}, fallbackListId)
+        mapTask(row, fallbackListId)
       );
 
       const preferred =
-        savedSelected && mappedLists.some((list) => list.id === savedSelected)
-          ? savedSelected
-          : mappedLists.find((list) => list.name === 'Personal')?.id || fallbackListId;
+        mappedLists.find((list) => list.id === selectedListId)?.id ||
+        mappedLists.find((list) => list.name === 'Personal')?.id ||
+        fallbackListId;
 
       setLists(mappedLists);
       setTasks(mappedTasks);
       setSelectedListId(preferred || null);
-      extrasReady.current = true;
     } catch (err) {
       setError(err.message || 'Could not load tasks from the server.');
     } finally {
       setLoading(false);
       setHydrated(true);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
+    if (!userHydrated) {
+      return;
+    }
     loadFromApi();
-  }, [loadFromApi]);
-
-  useEffect(() => {
-    if (!selectedListId) {
-      return;
-    }
-    AsyncStorage.setItem(SELECTED_KEY, selectedListId).catch(() => {});
-  }, [selectedListId]);
-
-  useEffect(() => {
-    if (!extrasReady.current) {
-      return;
-    }
-    AsyncStorage.setItem(EXTRAS_KEY, JSON.stringify(extrasFromTasks(tasks))).catch((err) => {
-      console.warn('Could not save local task extras', err);
-    });
-  }, [tasks]);
+    // Reload when the signed-in user changes, not on every list tap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userHydrated, userId]);
 
   function scheduleUndoClear() {
     if (undoTimer.current) {
@@ -178,7 +180,7 @@ export function TaskProvider({ children }) {
   }
 
   const value = useMemo(() => {
-    async function addTask({ text, priority = 'medium', category = 'personal', dueDate = null }) {
+    async function addTask({ text, priority = 'medium', category = 'personal', dueDate = null, imageUri = '' }) {
       try {
         const row = await apiCreateTask({
           list_id: selectedListId ? Number(selectedListId) : null,
@@ -187,8 +189,9 @@ export function TaskProvider({ children }) {
           priority,
           category,
           due_date: dueDate,
+          image_uri: imageUri || null,
         });
-        setTasks((current) => [...current, mapTask(row, {}, selectedListId)]);
+        setTasks((current) => [...current, mapTask(row, selectedListId)]);
         setError(null);
       } catch (err) {
         setError(err.message);
@@ -200,6 +203,11 @@ export function TaskProvider({ children }) {
       try {
         if (Object.keys(body).length > 0) {
           await apiUpdateTask(id, body);
+        }
+        if (patch.completed === true) {
+          const phrase = pickNextPhrase(lastPhrase.current);
+          lastPhrase.current = phrase;
+          setMotivation(phrase);
         }
         setTasks((current) =>
           current.map((task) => (task.id === id ? { ...task, ...patch } : task))
@@ -223,10 +231,15 @@ export function TaskProvider({ children }) {
       const completed = !task?.completed;
       const completedAt = completed ? new Date().toISOString() : null;
       try {
-        await apiUpdateTask(id, { completed });
+        await apiUpdateTask(id, { completed, completed_at: completedAt });
         setTasks((current) =>
           current.map((item) => (item.id === id ? { ...item, completed, completedAt } : item))
         );
+        if (completed) {
+          const phrase = pickNextPhrase(lastPhrase.current);
+          lastPhrase.current = phrase;
+          setMotivation(phrase);
+        }
         setError(null);
       } catch (err) {
         setError(err.message);
@@ -266,12 +279,18 @@ export function TaskProvider({ children }) {
       }
       try {
         const row = await apiCreateTask(payloadFromTask(snapshot));
+        const restored = mapTask(row, selectedListId);
+        const kids = snapshot.subtasks || [];
+        const createdSubs = [];
+        for (const sub of kids) {
+          const saved = await apiAddSubtask(restored.id, {
+            text: sub.text,
+            completed: Boolean(sub.completed),
+          });
+          createdSubs.push(mapSubtask(saved));
+        }
         setTasks((current) => [
-          mapTask(
-            row,
-            { notes: snapshot.notes, subtasks: snapshot.subtasks, completedAt: snapshot.completedAt },
-            selectedListId
-          ),
+          { ...restored, notes: snapshot.notes || restored.notes, subtasks: createdSubs },
           ...current.filter((task) => task.id !== snapshot.id),
         ]);
         setError(null);
@@ -292,52 +311,68 @@ export function TaskProvider({ children }) {
       }
     }
 
-    function addSubtask(taskId, text) {
+    async function addSubtask(taskId, text) {
       const trimmed = text.trim();
       if (!trimmed) {
         return;
       }
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === taskId
-            ? {
-                ...task,
-                subtasks: [
-                  ...(task.subtasks || []),
-                  { id: `${Date.now()}`, text: trimmed, completed: false },
-                ],
-              }
-            : task
-        )
-      );
+      try {
+        const row = await apiAddSubtask(taskId, { text: trimmed, completed: false });
+        const mapped = mapSubtask(row);
+        setTasks((current) =>
+          current.map((task) =>
+            task.id === taskId
+              ? { ...task, subtasks: [...(task.subtasks || []), mapped] }
+              : task
+          )
+        );
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+      }
     }
 
-    function toggleSubtask(taskId, subtaskId) {
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === taskId
-            ? {
-                ...task,
-                subtasks: (task.subtasks || []).map((sub) =>
-                  sub.id === subtaskId ? { ...sub, completed: !sub.completed } : sub
-                ),
-              }
-            : task
-        )
-      );
+    async function toggleSubtask(taskId, subtaskId) {
+      const parent = tasks.find((task) => task.id === taskId);
+      const sub = parent?.subtasks?.find((item) => item.id === subtaskId);
+      const nextCompleted = !sub?.completed;
+      try {
+        await apiUpdateSubtask(subtaskId, { completed: nextCompleted });
+        setTasks((current) =>
+          current.map((task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  subtasks: (task.subtasks || []).map((item) =>
+                    item.id === subtaskId ? { ...item, completed: nextCompleted } : item
+                  ),
+                }
+              : task
+          )
+        );
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+      }
     }
 
-    function deleteSubtask(taskId, subtaskId) {
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === taskId
-            ? {
-                ...task,
-                subtasks: (task.subtasks || []).filter((sub) => sub.id !== subtaskId),
-              }
-            : task
-        )
-      );
+    async function deleteSubtask(taskId, subtaskId) {
+      try {
+        await apiDeleteSubtask(subtaskId);
+        setTasks((current) =>
+          current.map((task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  subtasks: (task.subtasks || []).filter((item) => item.id !== subtaskId),
+                }
+              : task
+          )
+        );
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+      }
     }
 
     async function createList(name) {
@@ -415,6 +450,8 @@ export function TaskProvider({ children }) {
       error,
       reload: loadFromApi,
       undoItem,
+      motivation,
+      clearMotivation: () => setMotivation(null),
       completedThisWeek,
       addTask,
       updateTask,
@@ -430,7 +467,7 @@ export function TaskProvider({ children }) {
       deleteList,
       selectList: setSelectedListId,
     };
-  }, [tasks, lists, selectedListId, hydrated, loading, error, undoItem, loadFromApi]);
+  }, [tasks, lists, selectedListId, hydrated, loading, error, undoItem, motivation, loadFromApi]);
 
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>;
 }

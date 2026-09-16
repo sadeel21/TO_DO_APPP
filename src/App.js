@@ -184,7 +184,7 @@ export default function App() {
         <FilterTabs value={filter} onChange={setFilter} />
         <SortBar value={sort} onChange={setSort} />
         <Text style={[styles.hint, { color: colors.muted }]}>
-          Swipe left to delete · Edit to rename · tap the title for details
+          Swipe right to complete · swipe left to delete · Edit to rename · Focus for a timer · tap the title for details
         </Text>
 
         <TaskList
@@ -194,6 +194,7 @@ export default function App() {
           onToggle={toggleTask}
           onDelete={requestDelete}
           onSaveTitle={(id, text) => updateTask(id, { text })}
+          onUpdate={updateTask}
           onAddSubtask={addSubtask}
           onToggleSubtask={toggleSubtask}
           onDeleteSubtask={deleteSubtask}

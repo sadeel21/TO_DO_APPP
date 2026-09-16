@@ -2,26 +2,66 @@
  * React concepts:
  * - props + callbacks for complete
  * - expo-router navigation (router.push) to open the details screen
- * - gestures (Swipeable) instead of a Delete button
- * - Modal + controlled input for editing the title
+ * - ReanimatedSwipeable (RNGH + Reanimated worklets) for complete / delete
+ * - Modal + controlled input for editing the title and attached image
  */
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
-import { Swipeable } from 'react-native-gesture-handler';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Image } from 'expo-image';
+import * as Haptics from 'expo-haptics';
+import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import Animated, {
+  Extrapolation,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import Card from '@/components/Card';
 import EditTaskModal from '@/components/EditTaskModal';
 import SubtaskItem from '@/components/SubtaskItem';
+import TaskImagePreview from '@/components/TaskImagePreview';
 import { formatDueDate, getCategory, getPriority } from '@/constants/taskMeta';
 import { useTheme } from '@/context/ThemeContext';
+
+const COMPLETE_COLOR = '#16A34A';
+const DELETE_COLOR = '#E11D48';
+const ACTION_WIDTH = 96;
+
+function haptic(kind) {
+  const run =
+    kind === 'success'
+      ? Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      : Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+  run.catch(() => {});
+}
+
+/** Reanimated worklet interpolates the underlay as the row is dragged. */
+function SwipeAction({ progress, label, backgroundColor }) {
+  const style = useAnimatedStyle(() => ({
+    opacity: interpolate(progress.value, [0, 1], [0.45, 1], Extrapolation.CLAMP),
+    transform: [
+      {
+        scale: interpolate(progress.value, [0, 1], [0.92, 1], Extrapolation.CLAMP),
+      },
+    ],
+  }));
+
+  return (
+    <Animated.View style={[styles.actionWrap, { backgroundColor }, style]}>
+      <Text style={styles.actionLabel}>{label}</Text>
+    </Animated.View>
+  );
+}
 
 export default function TaskItem({
   task,
   onToggle,
   onDelete,
   onSaveTitle,
+  onUpdate,
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
@@ -30,6 +70,7 @@ export default function TaskItem({
   const swipeRef = useRef(null);
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [subtaskDraft, setSubtaskDraft] = useState('');
   const opacity = useSharedValue(0);
   const translateY = useSharedValue(8);
@@ -53,24 +94,41 @@ export default function TaskItem({
     router.push(`/task/${task.id}`);
   }
 
+  function closeSwipe() {
+    swipeRef.current?.close();
+  }
+
   function askDelete() {
     onDelete(task.id, {
-      onCancel: () => swipeRef.current?.close(),
+      onCancel: closeSwipe,
     });
   }
 
-  function renderRightActions() {
-    return (
-      <View style={styles.deleteWrap}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Delete ${task.text}`}
-          onPress={askDelete}
-          style={styles.deleteAction}>
-          <Text style={styles.deleteLabel}>Delete</Text>
-        </Pressable>
-      </View>
-    );
+  function completeFromSwipe() {
+    closeSwipe();
+    if (task.completed) {
+      return;
+    }
+    haptic('success');
+    const completedAt = new Date().toISOString();
+    if (onUpdate) {
+      onUpdate(task.id, { completed: true, completedAt });
+    } else {
+      onToggle(task.id);
+    }
+  }
+
+  // ReanimatedSwipeable reports the drag direction (row translation),
+  // not which side of the row opened: RIGHT = swipe right, LEFT = swipe left.
+  function onSwipeOpen(direction) {
+    if (direction === 'right') {
+      completeFromSwipe();
+      return;
+    }
+    if (direction === 'left') {
+      haptic('warning');
+      askDelete();
+    }
   }
 
   return (
@@ -78,14 +136,17 @@ export default function TaskItem({
       <Swipeable
         ref={swipeRef}
         friction={2}
-        rightThreshold={40}
+        leftThreshold={48}
+        rightThreshold={48}
+        overshootLeft={false}
         overshootRight={false}
-        renderRightActions={renderRightActions}
-        onSwipeableOpen={(direction) => {
-          if (direction === 'right') {
-            askDelete();
-          }
-        }}>
+        renderLeftActions={(progress) => (
+          <SwipeAction progress={progress} label="Complete" backgroundColor={COMPLETE_COLOR} />
+        )}
+        renderRightActions={(progress) => (
+          <SwipeAction progress={progress} label="Delete" backgroundColor={DELETE_COLOR} />
+        )}
+        onSwipeableOpen={onSwipeOpen}>
         <Card style={styles.card}>
           <View style={styles.topRow}>
           <Pressable
@@ -108,10 +169,21 @@ export default function TaskItem({
             </View>
           </Pressable>
 
+          {task.imageUri ? (
+            <Pressable
+              accessibilityRole="imagebutton"
+              accessibilityLabel="Preview attached image"
+              onPress={() => setPreviewOpen(true)}>
+              <Image source={{ uri: task.imageUri }} style={styles.thumb} contentFit="cover" />
+            </Pressable>
+          ) : null}
+
           <Pressable
             accessibilityRole="link"
             accessibilityLabel={`Open details for ${task.text}`}
             onPress={openDetails}
+            onLongPress={() => router.push(`/focus/${task.id}`)}
+            delayLongPress={350}
             style={styles.main}>
             <Text
               style={[
@@ -145,6 +217,13 @@ export default function TaskItem({
             </View>
           </Pressable>
 
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Focus on ${task.text}`}
+            onPress={() => router.push(`/focus/${task.id}`)}
+            style={[styles.editBtn, { backgroundColor: colors.accentSoft }]}>
+            <Text style={[styles.editLabel, { color: colors.accent }]}>Focus</Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={expanded ? 'Hide subtasks' : 'Show subtasks'}
@@ -204,12 +283,18 @@ export default function TaskItem({
       <EditTaskModal
         visible={editing}
         initialText={task.text}
+        initialImageUri={task.imageUri || ''}
+        allowImage
         onClose={() => setEditing(false)}
-        onSave={(text) => {
+        onSave={(text, imageUri) => {
           onSaveTitle(task.id, text);
+          if (onUpdate && imageUri !== (task.imageUri || '')) {
+            onUpdate(task.id, { imageUri });
+          }
           setEditing(false);
         }}
       />
+      <TaskImagePreview uri={task.imageUri} visible={previewOpen} onClose={() => setPreviewOpen(false)} />
     </Animated.View>
   );
 }
@@ -239,6 +324,11 @@ const styles = StyleSheet.create({
   checkMark: {
     fontSize: 13,
     fontWeight: '800',
+  },
+  thumb: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
   },
   main: {
     flex: 1,
@@ -304,20 +394,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     fontSize: 14,
   },
-  deleteWrap: {
-    width: 96,
-    marginLeft: 8,
-    justifyContent: 'center',
-  },
-  deleteAction: {
+  actionWrap: {
     flex: 1,
+    width: ACTION_WIDTH,
+    marginHorizontal: 4,
     borderRadius: 18,
-    backgroundColor: '#E11D48',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  deleteLabel: {
+  actionLabel: {
     color: '#FFFFFF',
     fontWeight: '800',
+    fontSize: 13,
   },
 });

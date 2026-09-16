@@ -1,16 +1,17 @@
 /**
- * React concepts: Context + useEffect on app load + AsyncStorage
+ * React concepts: Context + useEffect on app load
  *
- * XP and badges are derived from tasks / dhikr / streak, then persisted.
- * New unlocks after the first hydrate show a celebration popup.
+ * XP and badges are derived from tasks / dhikr / streak, then saved
+ * to users + achievements_progress.
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { evaluateAchievements } from '@/constants/achievements';
 import { useDhikr } from '@/context/DhikrContext';
 import { useStreak } from '@/context/StreakContext';
 import { useTasks } from '@/context/TaskContext';
+import { useUser } from '@/context/UserContext';
+import { getAchievements, setApiUserId, updateAchievementProgress } from '@/utils/api';
 import {
   computeTotalXp,
   countCompletedTasks,
@@ -19,35 +20,60 @@ import {
   levelFromXp,
 } from '@/utils/xpLogic';
 
-const STORAGE_KEY = '@todo/progress';
-
 const ProgressContext = createContext(null);
 
 export function ProgressProvider({ children }) {
+  const { userId, hydrated: userHydrated, saveProgress } = useUser();
   const { tasks, hydrated: tasksHydrated } = useTasks();
   const dhikr = useDhikr();
   const { longest } = useStreak();
   const [unlocked, setUnlocked] = useState({});
+  const [progressByKey, setProgressByKey] = useState({});
   const [hydrated, setHydrated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [totalXp, setTotalXp] = useState(0);
   const [celebration, setCelebration] = useState(null);
   const readyRef = useRef(false);
+  const lastSaved = useRef('');
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
+      if (!userHydrated) {
+        return;
+      }
+      if (!userId) {
+        setLoading(false);
+        setHydrated(true);
+        return;
+      }
+      setApiUserId(userId);
+      setLoading(true);
+      setError(null);
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!cancelled && raw) {
-          const parsed = JSON.parse(raw);
-          setUnlocked(parsed.unlocked || {});
-          setTotalXp(parsed.totalXp || 0);
+        const rows = await getAchievements(userId);
+        if (cancelled) {
+          return;
         }
-      } catch (error) {
-        console.warn('Could not load progress', error);
+        const nextUnlocked = {};
+        const nextProgress = {};
+        for (const row of rows || []) {
+          nextProgress[row.achievement_key] = Number(row.progress) || 0;
+          if (row.unlocked_at) {
+            nextUnlocked[row.achievement_key] = true;
+          }
+        }
+        setUnlocked(nextUnlocked);
+        setProgressByKey(nextProgress);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || 'Could not load achievements from the server.');
+        }
       } finally {
         if (!cancelled) {
+          setLoading(false);
           setHydrated(true);
         }
       }
@@ -57,7 +83,7 @@ export function ProgressProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userHydrated, userId]);
 
   const liveAchievements = useMemo(
     () =>
@@ -100,13 +126,45 @@ export function ProgressProvider({ children }) {
   }, [hydrated, tasksHydrated, dhikr.hydrated, xp, liveAchievements]);
 
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || !userId) {
       return;
     }
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ totalXp, unlocked })).catch((error) => {
-      console.warn('Could not save progress', error);
+    const signature = JSON.stringify({
+      xp,
+      unlocked,
+      progress: liveAchievements.map((item) => [item.id, item.current, item.unlocked]),
     });
-  }, [totalXp, unlocked, hydrated]);
+    if (signature === lastSaved.current) {
+      return;
+    }
+    lastSaved.current = signature;
+    const levels = levelFromXp(xp);
+    saveProgress({ xp: levels.totalXp, level: levels.level }).catch(() => {});
+    Promise.all(
+      liveAchievements.map((item) => {
+        const prev = progressByKey[item.id];
+        const wasUnlocked = Boolean(unlocked[item.id]);
+        if (prev === item.current && wasUnlocked === Boolean(item.unlocked)) {
+          return null;
+        }
+        return updateAchievementProgress(
+          item.id,
+          {
+            progress: item.current,
+            unlocked_at: item.unlocked && !unlocked[item.id] ? new Date().toISOString() : null,
+          },
+          userId
+        );
+      })
+    )
+      .then(() => {
+        setProgressByKey(Object.fromEntries(liveAchievements.map((item) => [item.id, item.current])));
+        setError(null);
+      })
+      .catch((err) => setError(err.message));
+    // progressByKey / saveProgress omitted so this cannot loop after each persist.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, userId, xp, unlocked, liveAchievements]);
 
   const achievements = useMemo(
     () =>
@@ -123,8 +181,10 @@ export function ProgressProvider({ children }) {
       achievements,
       celebration,
       dismissCelebration: () => setCelebration(null),
+      loading,
+      error,
     }),
-    [totalXp, achievements, celebration]
+    [totalXp, achievements, celebration, loading, error]
   );
 
   return <ProgressContext.Provider value={value}>{children}</ProgressContext.Provider>;

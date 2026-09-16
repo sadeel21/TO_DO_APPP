@@ -1,14 +1,15 @@
 /**
- * React concepts: Context + useEffect on app load + AsyncStorage
+ * React concepts: Context + useEffect on app load
  *
- * On hydrate, compare stored dates to today and rebuild current/longest.
- * Later, task completions and dhikr goals only add a day once.
+ * On hydrate, fetch the streak row, merge activity from tasks + dhikr,
+ * then PUT the snapshot back to PostgreSQL.
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useDhikr } from '@/context/DhikrContext';
 import { useTasks } from '@/context/TaskContext';
+import { useUser } from '@/context/UserContext';
+import { getStreak, setApiUserId, updateStreak } from '@/utils/api';
 import {
   deriveActiveDates,
   isMilestone,
@@ -16,8 +17,6 @@ import {
   snapshotFromDates,
   toDayKey,
 } from '@/utils/streakLogic';
-
-const STORAGE_KEY = '@todo/streak';
 
 const EMPTY = {
   activeDates: {},
@@ -27,6 +26,18 @@ const EMPTY = {
   lastChecked: null,
   lastCelebratedMilestone: 0,
 };
+
+function fromApi(row) {
+  const last = row.last_active_date ? String(row.last_active_date).slice(0, 10) : null;
+  return {
+    activeDates: row.active_dates && typeof row.active_dates === 'object' ? row.active_dates : {},
+    current: Number(row.current_streak) || 0,
+    longest: Number(row.longest_streak) || 0,
+    lastActiveDate: last,
+    lastChecked: last,
+    lastCelebratedMilestone: 0,
+  };
+}
 
 function snapshotsEqual(a, b) {
   return (
@@ -42,31 +53,53 @@ function snapshotsEqual(a, b) {
 const StreakContext = createContext(null);
 
 export function StreakProvider({ children }) {
+  const { userId, hydrated: userHydrated } = useUser();
   const { tasks, hydrated: tasksHydrated } = useTasks();
   const dhikr = useDhikr();
   const [state, setState] = useState(EMPTY);
   const [hydrated, setHydrated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [today, setToday] = useState(() => toDayKey());
   const [celebration, setCelebration] = useState(null);
   const celebratedRef = useRef(0);
   const allowCelebration = useRef(false);
+  const persistTimer = useRef(null);
+  const persistReady = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
+      if (!userHydrated) {
+        return;
+      }
+      if (!userId) {
+        persistReady.current = false;
+        setLoading(false);
+        setHydrated(true);
+        return;
+      }
+      persistReady.current = false;
+      setApiUserId(userId);
+      setLoading(true);
+      setError(null);
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!cancelled && raw) {
-          const parsed = JSON.parse(raw);
-          celebratedRef.current = parsed.lastCelebratedMilestone || 0;
-          setState({ ...EMPTY, ...parsed });
+        const row = await getStreak(userId);
+        if (!cancelled) {
+          const mapped = fromApi(row);
+          celebratedRef.current = mapped.lastCelebratedMilestone || 0;
+          setState({ ...EMPTY, ...mapped });
         }
-      } catch (error) {
-        console.warn('Could not load streak', error);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || 'Could not load streak from the server.');
+        }
       } finally {
         if (!cancelled) {
+          setLoading(false);
           setHydrated(true);
+          persistReady.current = true;
         }
       }
     }
@@ -75,9 +108,8 @@ export function StreakProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userHydrated, userId]);
 
-  // Re-run date math if the app stays open past midnight.
   useEffect(() => {
     const timer = setInterval(() => {
       setToday((current) => {
@@ -88,8 +120,6 @@ export function StreakProvider({ children }) {
     return () => clearInterval(timer);
   }, []);
 
-  // App-open check: merge activity from tasks + dhikr, then recompute
-  // consecutive days against today's calendar date (not a timestamp).
   useEffect(() => {
     if (!hydrated || !tasksHydrated || !dhikr.hydrated) {
       return;
@@ -103,7 +133,6 @@ export function StreakProvider({ children }) {
       if (snapshotsEqual(next, current) && allowCelebration.current) {
         return current;
       }
-      // Don't pop the milestone toast for historical days loaded on first open.
       if (!allowCelebration.current) {
         if (isMilestone(next.current)) {
           celebratedRef.current = Math.max(celebratedRef.current, next.current);
@@ -133,13 +162,29 @@ export function StreakProvider({ children }) {
   ]);
 
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || !userId || !persistReady.current) {
       return;
     }
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((error) => {
-      console.warn('Could not save streak', error);
-    });
-  }, [state, hydrated]);
+    if (persistTimer.current) {
+      clearTimeout(persistTimer.current);
+    }
+    persistTimer.current = setTimeout(() => {
+      updateStreak(
+        {
+          current_streak: state.current,
+          longest_streak: state.longest,
+          last_active_date: state.lastActiveDate,
+          active_dates: state.activeDates,
+        },
+        userId
+      ).catch((err) => setError(err.message));
+    }, 400);
+    return () => {
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+      }
+    };
+  }, [state, hydrated, userId]);
 
   const value = useMemo(
     () => ({
@@ -149,8 +194,10 @@ export function StreakProvider({ children }) {
       lastActiveDate: state.lastActiveDate,
       celebration,
       dismissCelebration: () => setCelebration(null),
+      loading,
+      error,
     }),
-    [state, celebration]
+    [state, celebration, loading, error]
   );
 
   return <StreakContext.Provider value={value}>{children}</StreakContext.Provider>;

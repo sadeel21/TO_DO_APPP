@@ -29,6 +29,13 @@
     "plugins": [
       "expo-router",
       [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to add tasks by voice.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to turn speech into tasks."
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "This app uses your photos for your profile picture.",

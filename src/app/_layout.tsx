@@ -19,6 +19,8 @@ import { TaskProvider } from '@/context/TaskContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { UserProvider } from '@/context/UserContext';
 import AchievementCelebration from '@/components/AchievementCelebration';
+import CompletionConfetti from '@/components/CompletionConfetti';
+import MotivationToast from '@/components/MotivationToast';
 import StreakCelebration from '@/components/StreakCelebration';
 
 SplashScreen.preventAutoHideAsync();
@@ -40,6 +42,8 @@ export default function RootLayout() {
                     <Stack screenOptions={{ headerShown: false }} />
                     <StreakCelebration />
                     <AchievementCelebration />
+                    <CompletionConfetti />
+                    <MotivationToast />
                   </View>
                 </ProgressProvider>
               </StreakProvider>

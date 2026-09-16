@@ -1,12 +1,13 @@
 /**
  * React concept: Context API (createContext + useContext + Provider)
  *
- * Context lets any child read the theme without "prop drilling"
- * (passing theme through every parent in between).
+ * Three appearance modes: light, dark, and auto (dark after 6:30 PM,
+ * light after 6:30 AM, using the device clock — no location/sunset API).
  */
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Light: cooler gray canvas, deep ink, saturated violet — not washed lilac.
 const lightColors = {
   background: '#EEF0F4',
   backgroundGlow: '#C4B5FD',
@@ -23,6 +24,11 @@ const lightColors = {
   checkboxOn: '#6D28D9',
   shadow: '#4C1D95',
   progressTrack: '#D8D6E0',
+  stats: {
+    tasks: { fill: '#2563EB', soft: '#DBEAFE', ink: '#1E3A8A' },
+    dhikr: { fill: '#0D9488', soft: '#CCFBF1', ink: '#115E59' },
+    streak: { fill: '#EA580C', soft: '#FFEDD5', ink: '#9A3412' },
+  },
   badge: {
     'first-week': { fill: '#EA580C', soft: '#FFEDD5', ink: '#9A3412', lockedFill: '#FB923C' },
     dedicated: { fill: '#DC2626', soft: '#FECACA', ink: '#991B1B', lockedFill: '#F87171' },
@@ -32,7 +38,6 @@ const lightColors = {
   },
 };
 
-// Dark: richer plum, bright type, vivid accents.
 const darkColors = {
   background: '#100C18',
   backgroundGlow: '#5B21B6',
@@ -49,6 +54,11 @@ const darkColors = {
   checkboxOn: '#A78BFA',
   shadow: '#000000',
   progressTrack: '#342A48',
+  stats: {
+    tasks: { fill: '#60A5FA', soft: '#1E3A8A', ink: '#BFDBFE' },
+    dhikr: { fill: '#2DD4BF', soft: '#115E59', ink: '#CCFBF1' },
+    streak: { fill: '#FB923C', soft: '#7C2D12', ink: '#FED7AA' },
+  },
   badge: {
     'first-week': { fill: '#FB923C', soft: '#7C2D12', ink: '#FED7AA', lockedFill: '#C2410C' },
     dedicated: { fill: '#F87171', soft: '#7F1D1D', ink: '#FECACA', lockedFill: '#B91C1C' },
@@ -60,20 +70,80 @@ const darkColors = {
 
 const ThemeContext = createContext(null);
 
-/**
- * Wraps the app and provides { isDark, colors, toggleTheme }.
- * children = whatever you nest inside <ThemeProvider> (composition).
- */
+const THEME_KEY = '@todo/theme';
+const DARK_START_MINUTES = 18 * 60 + 30;
+const LIGHT_START_MINUTES = 6 * 60 + 30;
+
+function isNightNow(date = new Date()) {
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  return minutes >= DARK_START_MINUTES || minutes < LIGHT_START_MINUTES;
+}
+
+function shouldBeDark(mode, date = new Date()) {
+  if (mode === 'dark') {
+    return true;
+  }
+  if (mode === 'light') {
+    return false;
+  }
+  return isNightNow(date);
+}
+
+function normalizeMode(raw) {
+  if (raw === 'dark' || raw === 'light' || raw === 'auto') {
+    return raw;
+  }
+  return 'light';
+}
+
 export function ThemeProvider({ children }) {
-  const [isDark, setIsDark] = useState(false);
+  const [mode, setMode] = useState('light');
+  const [clock, setClock] = useState(() => new Date());
+
+  useEffect(() => {
+    AsyncStorage.getItem(THEME_KEY)
+      .then((raw) => {
+        if (raw) {
+          setMode(normalizeMode(raw));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const onChange = (state) => {
+      if (state === 'active') {
+        setClock(new Date());
+      }
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    const timer = setInterval(() => setClock(new Date()), 60 * 1000);
+    return () => {
+      sub.remove();
+      clearInterval(timer);
+    };
+  }, []);
+
+  const isDark = shouldBeDark(mode, clock);
 
   const value = useMemo(
     () => ({
+      mode,
       isDark,
       colors: isDark ? darkColors : lightColors,
-      toggleTheme: () => setIsDark((prev) => !prev),
+      setThemeMode: (next) => {
+        const safe = normalizeMode(next);
+        setMode(safe);
+        AsyncStorage.setItem(THEME_KEY, safe).catch(() => {});
+      },
+      // Kept for older callers: flips between light and dark (leaves auto).
+      toggleTheme: () => {
+        const next = isDark ? 'light' : 'dark';
+        setMode(next);
+        AsyncStorage.setItem(THEME_KEY, next).catch(() => {});
+      },
     }),
-    [isDark]
+    [mode, isDark]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

@@ -13,6 +13,8 @@ import { StatusBar } from 'expo-status-bar';
 import Card from '@/components/Card';
 import ChipPicker from '@/components/ChipPicker';
 import ScreenHeader from '@/components/ScreenHeader';
+import TaskImageAttach from '@/components/TaskImageAttach';
+import TaskImagePreview from '@/components/TaskImagePreview';
 import { CATEGORIES, PRIORITIES, formatDateTime, formatDueDate, getCategory, getPriority, toDateInput } from '@/constants/taskMeta';
 import { useTasks } from '@/context/TaskContext';
 import { useTheme } from '@/context/ThemeContext';
@@ -24,6 +26,7 @@ export default function TaskDetailsScreen() {
   const { colors, isDark } = useTheme();
   const task = tasks.find((item) => item.id === taskId);
   const [notes, setNotes] = useState(task?.notes ?? '');
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     setNotes(task?.notes ?? '');
@@ -96,6 +99,15 @@ export default function TaskDetailsScreen() {
         </Card>
 
         <Card style={styles.block}>
+          <Text style={[styles.blockLabel, { color: colors.muted }]}>PHOTO</Text>
+          <TaskImageAttach
+            uri={task.imageUri}
+            onChange={(uri) => updateTask(task.id, { imageUri: uri })}
+            onPreview={() => setPreviewOpen(true)}
+          />
+        </Card>
+
+        <Card style={styles.block}>
           <Text style={[styles.blockLabel, { color: colors.muted }]}>NOTES</Text>
           <TextInput
             value={notes}
@@ -114,6 +126,7 @@ export default function TaskDetailsScreen() {
           />
         </Card>
       </ScrollView>
+      <TaskImagePreview uri={task.imageUri} visible={previewOpen} onClose={() => setPreviewOpen(false)} />
     </SafeAreaView>
   );
 }

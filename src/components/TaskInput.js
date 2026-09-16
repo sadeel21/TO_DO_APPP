@@ -8,6 +8,8 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import ChipPicker from '@/components/ChipPicker';
+import TaskImageAttach from '@/components/TaskImageAttach';
+import VoiceTaskInput from '@/components/VoiceTaskInput';
 import { CATEGORIES, PRIORITIES, toDateInput } from '@/constants/taskMeta';
 import { useTheme } from '@/context/ThemeContext';
 
@@ -17,6 +19,7 @@ export default function TaskInput({ onAdd }) {
   const [priority, setPriority] = useState('medium');
   const [category, setCategory] = useState('personal');
   const [dueDate, setDueDate] = useState('none');
+  const [imageUri, setImageUri] = useState('');
 
   const dueOptions = [
     { id: 'none', label: 'No due date', color: colors.muted },
@@ -34,11 +37,13 @@ export default function TaskInput({ onAdd }) {
       priority,
       category,
       dueDate: dueDate === 'none' ? null : dueDate,
+      imageUri,
     });
     setText('');
     setPriority('medium');
     setCategory('personal');
     setDueDate('none');
+    setImageUri('');
   }
 
   return (
@@ -71,10 +76,12 @@ export default function TaskInput({ onAdd }) {
           ]}>
           <Text style={[styles.buttonLabel, { color: colors.accentText }]}>Add</Text>
         </Pressable>
+        <VoiceTaskInput onConfirm={onAdd} priority={priority} category={category} />
       </View>
       <ChipPicker label="Priority" options={PRIORITIES} value={priority} onChange={setPriority} />
       <ChipPicker label="Category" options={CATEGORIES} value={category} onChange={setCategory} />
       <ChipPicker label="Due" options={dueOptions} value={dueDate} onChange={setDueDate} />
+      <TaskImageAttach uri={imageUri} onChange={setImageUri} />
     </View>
   );
 }
@@ -82,6 +89,8 @@ export default function TaskInput({ onAdd }) {
 const styles = StyleSheet.create({
   wrap: {
     gap: 12,
+    zIndex: 8,
+    overflow: 'visible',
   },
   row: {
     flexDirection: 'row',
@@ -101,7 +110,7 @@ const styles = StyleSheet.create({
   },
   button: {
     justifyContent: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 14,
     borderRadius: 16,
   },
   buttonLabel: {

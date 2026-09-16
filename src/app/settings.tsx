@@ -19,7 +19,7 @@ import { useUser } from '@/context/UserContext';
 import { pickProfileImage, promptProfileImage } from '@/utils/pickProfileImage';
 
 export default function SettingsScreen() {
-  const { colors, isDark, toggleTheme } = useTheme();
+  const { colors, isDark, mode, setThemeMode } = useTheme();
   const { tasks, completedThisWeek } = useTasks();
   const { name, photoUri, saveName, savePhoto } = useUser();
   const { level, totalXp } = useProgress();
@@ -93,26 +93,40 @@ export default function SettingsScreen() {
 
         <Card style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.muted }]}>APPEARANCE</Text>
-          <View style={styles.row}>
-            <View>
-              <Text style={[styles.label, { color: colors.text }]}>Theme</Text>
-              <Text style={[styles.help, { color: colors.muted }]}>
-                {isDark ? 'Dark plum palette' : 'Soft lilac palette'}
-              </Text>
-            </View>
-            <Pressable
-              accessibilityRole="switch"
-              accessibilityState={{ checked: isDark }}
-              accessibilityLabel="Toggle theme"
-              onPress={toggleTheme}
-              style={[
-                styles.toggle,
-                { backgroundColor: isDark ? colors.accent : colors.accentSoft },
-              ]}>
-              <Text style={[styles.toggleLabel, { color: isDark ? colors.accentText : colors.text }]}>
-                {isDark ? 'Dark' : 'Light'}
-              </Text>
-            </Pressable>
+          <Text style={[styles.label, { color: colors.text }]}>Theme</Text>
+          <Text style={[styles.help, { color: colors.muted }]}>
+            {mode === 'auto'
+              ? 'Auto: dark after 6:30 PM, light after 6:30 AM'
+              : isDark
+                ? 'Dark plum palette'
+                : 'Soft lilac palette'}
+          </Text>
+          <View style={styles.segment}>
+            {['light', 'dark', 'auto'].map((option) => {
+              const selected = mode === option;
+              return (
+                <Pressable
+                  key={option}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  onPress={() => setThemeMode(option)}
+                  style={[
+                    styles.segmentBtn,
+                    {
+                      backgroundColor: selected ? colors.accent : 'transparent',
+                      borderColor: colors.border,
+                    },
+                  ]}>
+                  <Text
+                    style={[
+                      styles.segmentLabel,
+                      { color: selected ? colors.accentText : colors.text },
+                    ]}>
+                    {option === 'light' ? 'Light' : option === 'dark' ? 'Dark' : 'Auto'}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
         </Card>
 
@@ -234,5 +248,20 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 8,
+  },
+  segment: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  segmentBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  segmentLabel: {
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

@@ -17,6 +17,7 @@ export default function TaskList({
   onToggle,
   onDelete,
   onSaveTitle,
+  onUpdate,
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
@@ -34,6 +35,7 @@ export default function TaskList({
           onToggle={onToggle}
           onDelete={onDelete}
           onSaveTitle={onSaveTitle}
+          onUpdate={onUpdate}
           onAddSubtask={onAddSubtask}
           onToggleSubtask={onToggleSubtask}
           onDeleteSubtask={onDeleteSubtask}

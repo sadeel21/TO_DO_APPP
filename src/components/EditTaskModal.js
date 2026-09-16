@@ -7,11 +7,14 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import TaskImageAttach from '@/components/TaskImageAttach';
 import { useTheme } from '@/context/ThemeContext';
 
 export default function EditTaskModal({
   visible,
   initialText,
+  initialImageUri = '',
+  allowImage = false,
   onSave,
   onClose,
   title = 'Edit task',
@@ -19,19 +22,21 @@ export default function EditTaskModal({
 }) {
   const { colors } = useTheme();
   const [text, setText] = useState(initialText);
+  const [imageUri, setImageUri] = useState(initialImageUri);
 
   useEffect(() => {
     if (visible) {
       setText(initialText);
+      setImageUri(initialImageUri || '');
     }
-  }, [visible, initialText]);
+  }, [visible, initialText, initialImageUri]);
 
   function handleSave() {
     const trimmed = text.trim();
     if (!trimmed) {
       return;
     }
-    onSave(trimmed);
+    onSave(trimmed, imageUri);
   }
 
   return (
@@ -50,6 +55,7 @@ export default function EditTaskModal({
               { color: colors.text, borderColor: colors.border, backgroundColor: colors.background },
             ]}
           />
+          {allowImage ? <TaskImageAttach uri={imageUri} onChange={setImageUri} /> : null}
           <View style={styles.actions}>
             <Pressable accessibilityRole="button" onPress={onClose} style={styles.action}>
               <Text style={[styles.actionLabel, { color: colors.muted }]}>Cancel</Text>

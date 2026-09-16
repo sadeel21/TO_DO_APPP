@@ -1,8 +1,8 @@
 /**
  * Device-reachable API origin for Expo Go on a physical phone.
- * Change this if your computer’s LAN IP changes.
+ * Must match this PC’s current Wi‑Fi IPv4 (ipconfig). Not localhost.
  */
-export const API_BASE_URL = 'http://10.10.10.4:3000';
+export const API_BASE_URL = 'http://192.168.1.37:3000';
 
 /** Demo user inserted when the database was set up. */
 export const API_USER_ID = 1;

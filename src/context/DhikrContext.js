@@ -2,15 +2,14 @@
  * React concepts: Context + useEffect for persistence and a daily reset
  *
  * Counts live here so the Dhikr screen and history share one source of truth.
- * When the stored date is not today, yesterday’s totals move into history.
+ * Daily totals and goals are stored in PostgreSQL (dhikr_logs + dhikr_goals).
  */
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
 import { DHIKR_ITEMS, defaultGoals, emptyCounts, todayKey } from '@/constants/dhikr';
-
-const STORAGE_KEY = '@todo/dhikr';
+import { useUser } from '@/context/UserContext';
+import { getDhikrLogs, logDhikr, setApiUserId } from '@/utils/api';
 
 function rollToToday(state) {
   const today = todayKey();
@@ -41,28 +40,65 @@ function buildInitial() {
   };
 }
 
+function stateFromApi(payload) {
+  const today = todayKey();
+  const counts = emptyCounts();
+  const history = {};
+  for (const row of payload.logs || []) {
+    const date = String(row.date).slice(0, 10);
+    const type = row.dhikr_type;
+    if (date === today) {
+      counts[type] = Number(row.count) || 0;
+    } else {
+      if (!history[date]) {
+        history[date] = emptyCounts();
+      }
+      history[date][type] = Number(row.count) || 0;
+    }
+  }
+  const goals = defaultGoals();
+  for (const row of payload.goals || []) {
+    goals[row.dhikr_type] = Number(row.goal) || goals[row.dhikr_type];
+  }
+  return { date: today, counts, goals, history };
+}
+
 const DhikrContext = createContext(null);
 
 export function DhikrProvider({ children }) {
+  const { userId, hydrated: userHydrated } = useUser();
   const [state, setState] = useState(buildInitial);
   const [hydrated, setHydrated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
+      if (!userHydrated) {
+        return;
+      }
+      if (!userId) {
+        setLoading(false);
+        setHydrated(true);
+        return;
+      }
+      setApiUserId(userId);
+      setLoading(true);
+      setError(null);
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!cancelled && raw) {
-          const parsed = JSON.parse(raw);
-          setState(rollToToday({ ...buildInitial(), ...parsed }));
-        } else if (!cancelled) {
-          setState(rollToToday(buildInitial()));
+        const payload = await getDhikrLogs(userId);
+        if (!cancelled) {
+          setState(rollToToday(stateFromApi(payload)));
         }
-      } catch (error) {
-        console.warn('Could not load dhikr', error);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || 'Could not load dhikr from the server.');
+        }
       } finally {
         if (!cancelled) {
+          setLoading(false);
           setHydrated(true);
         }
       }
@@ -72,9 +108,8 @@ export function DhikrProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userHydrated, userId]);
 
-  // If the app stays open past midnight, roll the day without a reload.
   useEffect(() => {
     const timer = setInterval(() => {
       setState((current) => rollToToday(current));
@@ -82,19 +117,10 @@ export function DhikrProvider({ children }) {
     return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((error) => {
-      console.warn('Could not save dhikr', error);
-    });
-  }, [state, hydrated]);
-
   const value = useMemo(() => {
-    function increment(id) {
-      // Fire-and-forget: awaiting haptics can stall the count on web.
+    async function increment(id) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      const day = todayKey();
       setState((current) => {
         const next = rollToToday(current);
         return {
@@ -105,9 +131,24 @@ export function DhikrProvider({ children }) {
           },
         };
       });
+      try {
+        await logDhikr({ dhikr_type: id, date: day, increment: 1 });
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+        setState((current) => ({
+          ...current,
+          counts: {
+            ...current.counts,
+            [id]: Math.max(0, (current.counts[id] || 0) - 1),
+          },
+        }));
+      }
     }
 
-    function reset(id) {
+    async function reset(id) {
+      const day = todayKey();
+      const previous = state.counts[id] || 0;
       setState((current) => {
         const next = rollToToday(current);
         return {
@@ -115,14 +156,35 @@ export function DhikrProvider({ children }) {
           counts: { ...next.counts, [id]: 0 },
         };
       });
+      try {
+        await logDhikr({ dhikr_type: id, date: day, count: 0 });
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+        setState((current) => ({
+          ...current,
+          counts: { ...current.counts, [id]: previous },
+        }));
+      }
     }
 
-    function setGoal(id, goal) {
+    async function setGoal(id, goal) {
       const safe = Math.max(1, Math.min(9999, Number(goal) || 1));
+      const previous = state.goals[id];
       setState((current) => ({
         ...rollToToday(current),
         goals: { ...current.goals, [id]: safe },
       }));
+      try {
+        await logDhikr({ dhikr_type: id, goal: safe });
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+        setState((current) => ({
+          ...current,
+          goals: { ...current.goals, [id]: previous },
+        }));
+      }
     }
 
     return {
@@ -132,11 +194,13 @@ export function DhikrProvider({ children }) {
       goals: state.goals,
       history: state.history,
       hydrated,
+      loading,
+      error,
       increment,
       reset,
       setGoal,
     };
-  }, [state, hydrated]);
+  }, [state, hydrated, loading, error]);
 
   return <DhikrContext.Provider value={value}>{children}</DhikrContext.Provider>;
 }

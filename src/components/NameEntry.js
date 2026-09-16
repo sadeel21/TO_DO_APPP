@@ -4,7 +4,7 @@
  * First launch: name is required; photo is optional via expo-image-picker.
  */
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,11 +15,33 @@ import { pickProfileImage, promptProfileImage } from '@/utils/pickProfileImage';
 
 export default function NameEntry() {
   const { colors, isDark } = useTheme();
-  const { saveName, photoUri, savePhoto } = useUser();
+  const { saveName, photoUri, savePhoto, error } = useUser();
   const [draft, setDraft] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState(null);
+
+  const visibleError = localError || error;
 
   async function submit() {
-    await saveName(draft);
+    const trimmed = draft.trim();
+    if (!trimmed || submitting) {
+      return;
+    }
+    setSubmitting(true);
+    setLocalError(null);
+    console.log('[onboarding] NameEntry submit start');
+    try {
+      const ok = await saveName(trimmed);
+      console.log('[onboarding] NameEntry submit result', { ok });
+      if (!ok) {
+        console.warn('[onboarding] NameEntry submit did not succeed');
+      }
+    } catch (err) {
+      console.error('[onboarding] NameEntry submit threw', err);
+      setLocalError(err.message || 'Could not save your name. Check that the server is running.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -77,9 +99,25 @@ export default function NameEntry() {
         <Pressable
           accessibilityRole="button"
           onPress={submit}
-          style={[styles.button, { backgroundColor: colors.accent, opacity: draft.trim() ? 1 : 0.5 }]}>
-          <Text style={[styles.buttonLabel, { color: colors.accentText }]}>Continue</Text>
+          disabled={submitting || !draft.trim()}
+          style={[
+            styles.button,
+            { backgroundColor: colors.accent, opacity: draft.trim() && !submitting ? 1 : 0.5 },
+          ]}>
+          {submitting ? (
+            <ActivityIndicator color={colors.accentText} />
+          ) : (
+            <Text style={[styles.buttonLabel, { color: colors.accentText }]}>Continue</Text>
+          )}
         </Pressable>
+        {visibleError ? (
+          <View style={[styles.errorBox, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }]}>
+            <Text style={[styles.errorText, { color: colors.danger }]}>{visibleError}</Text>
+            <Pressable onPress={submit} disabled={submitting}>
+              <Text style={[styles.errorRetry, { color: colors.accent }]}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -155,6 +193,22 @@ const styles = StyleSheet.create({
   },
   buttonLabel: {
     fontSize: 17,
+    fontWeight: '800',
+  },
+  errorBox: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+    gap: 8,
+    width: '100%',
+  },
+  errorText: {
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  errorRetry: {
+    fontSize: 14,
     fontWeight: '800',
   },
 });

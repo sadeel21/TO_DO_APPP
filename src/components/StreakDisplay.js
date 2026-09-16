@@ -3,13 +3,46 @@
  *
  * compact = header chip. Full mode = stats + 30-day calendar.
  */
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import { useEffect } from 'react';
 
 import Card from '@/components/Card';
+import PressScale from '@/components/PressScale';
 import { useTheme } from '@/context/ThemeContext';
+import { colorAlpha } from '@/utils/colorAlpha';
 import { dayNumber, lastNDayKeys, toDayKey, weekdayIndex } from '@/utils/streakLogic';
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function BreathingFlame({ active }) {
+  const pulse = useSharedValue(1);
+
+  useEffect(() => {
+    if (active) {
+      pulse.value = withRepeat(
+        withSequence(withTiming(1.14, { duration: 920 }), withTiming(1, { duration: 920 })),
+        -1,
+        false
+      );
+    } else {
+      pulse.value = 1;
+    }
+  }, [active, pulse]);
+
+  const style = useAnimatedStyle(() => ({
+    transform: [{ scale: pulse.value }],
+  }));
+
+  return <Animated.Text style={[styles.flame, style]}>🔥</Animated.Text>;
+}
 
 export default function StreakDisplay({
   compact = false,
@@ -26,21 +59,38 @@ export default function StreakDisplay({
   const label = current === 1 ? '1 day streak' : `${current} day streak`;
 
   if (compact) {
-    const Chip = onPress ? Pressable : View;
-    return (
-      <Chip
-        accessibilityRole={onPress ? 'link' : undefined}
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={[
-          styles.chip,
-          { backgroundColor: colors.accentSoft, borderColor: colors.border },
-          style,
-        ]}>
-        <Text style={styles.flame}>🔥</Text>
-        <Text style={[styles.chipLabel, { color: colors.text }]}>{label}</Text>
-      </Chip>
+    const chipBody = (
+      <>
+        <LinearGradient
+          colors={[colors.accent, colors.accentSoft]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        <BreathingFlame active={current > 0} />
+        <Text style={[styles.chipLabel, { color: colors.accentText }]}>{label}</Text>
+      </>
     );
+
+    const chipStyle = [
+      styles.chip,
+      { borderColor: colorAlpha(colors.accent, 0.35), shadowColor: colors.accent },
+      style,
+    ];
+
+    if (onPress) {
+      return (
+        <PressScale
+          accessibilityRole="link"
+          accessibilityLabel={label}
+          onPress={onPress}
+          style={chipStyle}>
+          {chipBody}
+        </PressScale>
+      );
+    }
+
+    return <View style={chipStyle}>{chipBody}</View>;
   }
 
   return (
@@ -104,19 +154,24 @@ const styles = StyleSheet.create({
   chip: {
     alignSelf: 'flex-start',
     marginTop: 10,
+    overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     borderWidth: 1,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 6,
   },
   flame: {
-    fontSize: 14,
+    fontSize: 16,
   },
   chipLabel: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
   },
   stack: {
